@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function active() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && profile().activo == true;
+    }
+    function isAdmin()     { return active() && profile().rol == 'admin'; }
+    function isValidator() { return active() && profile().rol == 'validador'; }
+    function isPilot()     { return active() && profile().rol == 'piloto'; }
+
+    // Marca que indica que ya se creó el primer administrador
+    match /config/bootstrap {
+      allow read: if true;
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/config/bootstrap);
+      allow update, delete: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if active() || (signedIn() && request.auth.uid == uid);
+      allow create: if isAdmin()
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.rol == 'admin'
+            && !exists(/databases/$(database)/documents/config/bootstrap));
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /incidents/{id} {
+      allow read: if active();
+      allow create: if isPilot() && request.resource.data.pilotoId == request.auth.uid;
+      allow update: if isAdmin() || isValidator()
+        || (isPilot() && resource.data.pilotoId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['vistoPiloto']));
+      allow delete: if isAdmin();
+    }
+  }
+}
